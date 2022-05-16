@@ -2,7 +2,7 @@
 # @Author : lzcpapa
 # @Email  : miningsecret@gmail.com
 # @Time   : 2022/04/25
-"""DCN Model"""
+"""DCN-V2 Model"""
 
 import tensorflow as tf
 from recsyskit.model import layers
@@ -24,7 +24,7 @@ class DCNV2ModelBuilder(ModelBuilder):
         Returns:
             _type_: _description_
         """
-        _, input_dim = tf.shape(input)
+        input_dim = tf.shape(input)[-1]
         w_initial_value = tf.random.truncated_normal(shape=(input_dim,
                                                             input_dim),
                                                      stddev=0.01)
@@ -58,9 +58,18 @@ class DCNV2ModelBuilder(ModelBuilder):
                                                  activation=tf.nn.sigmoid,
                                                  name='gate')
         for i in range(cross_layer_num):
-            for j, subsparce in enumerate(subspace_experts):
-                
-                pass
+            experts = [
+                self._cost_effective_cross_network(x_0, x_l, j, subspace, i)
+                for j, subspace in enumerate(subspace_experts)
+            ]
+            experts = tf.stack(experts, axis=2)
+            print(experts)
+            print(tf.expand_dims(gates_output, axis=1))
+            x_l = tf.math.reduce_sum(experts *
+                                     tf.expand_dims(gates_output, axis=1),
+                                     axis=-1)
+
+        return x_l
 
     def _cost_effective_cross_network(self,
                                       x_0,
@@ -89,24 +98,23 @@ class DCNV2ModelBuilder(ModelBuilder):
         U_l = tf.Variable(UV_initial_value, name='{}_u'.format(name))
         V_l = tf.Variable(UV_initial_value, name='{}_v'.format(name))
         b_l = tf.Variable(b_initial_value, name='{}_b'.format(name))
-        project_r = tf.einsum('dr,bd->rb', V_l, x_l)
-        project_d = tf.einsum('dr,rb->bd', U_l, project_r)
-
+        project_r = tf.einsum('dr,...d->...r', V_l, x_l)  # batch * subspace
+        project_d = tf.einsum('dr,...r->...d', U_l, project_r)  # batch * dim
         return x_0 * (project_d + b_l)
 
     def _build_network(self, is_trainning=True):
         tf.compat.v1.logging.info(
             'Building network, is_trainning: {}'.format(is_trainning))
         dcn_type = 'Parallel'
-        self.ops_collections['deep_scope'] = scope.name
-        print(self.ops_collections['deep_scope'])
         input_layer = self._get_embedding_input_layer(
             self.conf.model_conf['default_embedding_size'],
             self.conf.model_conf['default_hash_bucket_size'])
         input_layer = tf.concat(input_layer, -1)
 
         with tf.compat.v1.variable_scope('cross_network') as scope:
-            cross_output = self._cross_network(input_layer)
+            # cross_output = self._cross_network(input_layer)
+            cross_output = self._cost_effective_mixture_cross_network(
+                input_layer, subspace_experts=[3, 5, 10])
 
         if dcn_type == 'Parallel':
             with tf.compat.v1.variable_scope('deep_network') as scope:
@@ -114,17 +122,18 @@ class DCNV2ModelBuilder(ModelBuilder):
                     input_layer,
                     layers=[1024, 256, 128],
                     activations=[tf.nn.relu, tf.nn.relu, tf.nn.relu])
-            output = self._mlp_layer(cross_output + dnn_output,
-                                         layers=[1],
-                                         activations=[tf.nn.sigmoid])
+            output = self._mlp_layer(tf.concat([cross_output, dnn_output],
+                                               axis=-1),
+                                     layers=[1],
+                                     activations=[tf.nn.sigmoid])
         elif dcn_type == 'Stacked':
             with tf.compat.v1.variable_scope('deep_network') as scope:
                 dnn_output = self._mlp_layer(cross_output,
-                                                 layers=[1024, 256, 128, 1],
-                                                 activations=[
-                                                     tf.nn.relu, tf.nn.relu,
-                                                     tf.nn.relu, tf.nn.sigmoid
-                                                 ])
+                                             layers=[1024, 256, 128, 1],
+                                             activations=[
+                                                 tf.nn.relu, tf.nn.relu,
+                                                 tf.nn.relu, tf.nn.sigmoid
+                                             ])
             output = dnn_output
 
         self.ops_collections['pred'] = output

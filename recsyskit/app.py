@@ -8,6 +8,7 @@ from collections import namedtuple
 
 import tensorflow as tf
 
+from recsyskit.model.classic.dcnv2_model_builder import DCNV2ModelBuilder
 from recsyskit.model.classic.dcn_model_builder import DCNModelBuilder
 from recsyskit.model.classic.wide_deep_model_builder import WideDeepModelBuilder
 from recsyskit.model.classic.biffm_model_builder import BiFFMModelBuilder
@@ -54,7 +55,7 @@ def get_model(conf):
     elif conf.model_conf['model'] == 'xDeepFM':
         raise NotImplementedError
     elif conf.model_conf['model'] == 'DCN-V2':
-        return DCNModelBuilder(conf)
+        return DCNV2ModelBuilder(conf)
     else:
         raise NotImplementedError
 
